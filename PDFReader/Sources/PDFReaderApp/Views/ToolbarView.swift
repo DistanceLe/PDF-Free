@@ -228,6 +228,7 @@ private struct DocumentToolbarContent: View {
             zoomControls
             divider
             layoutMenu
+            rotateControls
             divider
             readingControls
             divider
@@ -353,6 +354,45 @@ private struct DocumentToolbarContent: View {
         .help("页面布局")
     }
 
+    // MARK: - 旋转（v1.3.75）
+
+    /// 整页旋转 —— 顺时针 / 逆时针各一个图标。
+    ///
+    /// 原来是埋在「更多」菜单里的两个**文字项**。旋转是看扫描件时最常用的操作之一
+    ///（方向不对的扫描件一打开就得转），埋进菜单里等于没有，所以提到工具栏上。
+    ///
+    /// 图标用 `rotate.left` / `rotate.right` 这对弧线箭头，而不是参考图那种
+    /// "方框 + 箭头"：SF Symbols 只有顺时针方向的那个（`rectangle.portrait.rotate`），
+    /// **凑不成一对**。弧线箭头这一对方向明确、语义直白，用户一眼知道哪个转哪边。
+    ///
+    /// ⚠️ **不禁用只读模式**（和菜单里原来的行为一致）：转着看是纯阅读需求，
+    /// 而且 `saveAnnotationsToDisk` 里有一道 `guard isEditable`，
+    /// 只读模式下转完也**写不进文件**，不会污染原文件。
+    private var rotateControls: some View {
+        // ⚠️ 间距不能太小：`rotate.left` / `rotate.right` 都是"方框 + 上方弧线箭头"，
+        // 挨太近（试过 2pt）两个方框几乎连成一片、箭头也挤在一起，
+        // 看上去像一个图标，分不清哪个是顺时针。6pt 正好能分开又不占地方。
+        HStack(spacing: 6) {
+            Button {
+                pdfVM.rotateCurrentPageCounterClockwise()
+            } label: {
+                Image(systemName: "rotate.left")
+                    .font(.system(size: 14))
+            }
+            .buttonStyle(.borderless)
+            .help("逆时针旋转当前页 90°")
+
+            Button {
+                pdfVM.rotateCurrentPageClockwise()
+            } label: {
+                Image(systemName: "rotate.right")
+                    .font(.system(size: 14))
+            }
+            .buttonStyle(.borderless)
+            .help("顺时针旋转当前页 90°")
+        }
+    }
+
     // MARK: - 朗读与自动滚动
 
     private var readingControls: some View {
@@ -427,9 +467,8 @@ private struct DocumentToolbarContent: View {
             Button("打印…") { pdfVM.presentPrintOptions() }
             Button("文档信息…") { pdfVM.showDocumentInfo = true }
             Divider()
-            Button("逆时针旋转") { pdfVM.rotateCurrentPageCounterClockwise() }
-            Button("顺时针旋转") { pdfVM.rotateCurrentPageClockwise() }
-            Divider()
+            // 旋转已经移到工具栏上（`rotateControls`，v1.3.75）—— 那是常用操作，
+            // 不该埋在菜单里。这里留个记号，免得以后有人以为"旋转不见了"。
             Button("全屏") { appViewModel.toggleFullScreen() }
         } label: {
             Image(systemName: "ellipsis.circle")

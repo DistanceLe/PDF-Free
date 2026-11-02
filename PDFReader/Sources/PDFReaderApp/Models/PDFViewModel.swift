@@ -711,6 +711,22 @@ class PDFViewModel: ObservableObject {
         guard let page = pdfView?.currentPage else { return }
         let newRotation = (page.rotation + degrees + 360) % 360
         page.rotation = newRotation
+
+        // ⚠️ 必须标脏（v1.3.75 补）。
+        //
+        // 不标的话 `hasUnsavedChanges` 一直是 false —— 而关窗口那条路是
+        // `confirmClose` 里一句 `guard hasUnsavedChanges else { 直接放行 }`：
+        // 用户转完直接关窗口，**连问都不问**，重新打开一看还是原样。
+        // 杰哥报的"旋转保存不下来"就是这个 —— `saveAnnotationsToDisk` 本身
+        // 不检查这个标志（PDFKit 的 `write` 也确实会写 `/Rotate`，实测过），
+        // 它只是决定了"用户会不会被提醒去保存"。
+        //
+        // ⚠️ **只读模式下不标**：那种情况保存会被 `guard isEditable` 挡掉，
+        // 标了脏只会让关闭时弹一个"要不要保存"、点了又报错。
+        // 只读模式下旋转是纯查看（转着看方向不对的扫描件），不该算改动。
+        if isEditable {
+            markDirty()
+        }
     }
 
     // MARK: - 文档信息
@@ -3356,6 +3372,12 @@ class PDFViewModel: ObservableObject {
             guard let copy = annotation.copy() as? PDFAnnotation else { continue }
             clean.addAnnotation(copy)
         }
+        // ⚠️ **旋转也在页上**，重建页面时必须一起搬过来（v1.3.75 修）。
+        //
+        // 不搬的话，`clean` 是一张全新的、`rotation = 0` 的页面 ——
+        // 用户转了 90° 再导出，出来的还是正的（杰哥报的"图片旋转保存没生效"）。
+        // 这条和上面搬批注是同一个道理：**页面上除了内容，还有这些"状态"**。
+        clean.rotation = live?.rotation ?? 0
         return clean
     }
 
@@ -3390,14 +3412,32 @@ class PDFViewModel: ObservableObject {
             throw AnnotationSaveError.exportFailed("这一页的尺寸是空的")
         }
 
+        // ⚠️ 页面转了 90° / 270° 时是**侧躺**的：`page.draw` 会把内容转过来画，
+        // 但**画布得先跟着换宽高** —— 否则旋转后的内容整个落到画布外，
+        // 导出的就是一张空白图（v1.3.75 修：杰哥报"图片旋转后保存没生效"）。
+        //
+        // 实测（300×200 的页面，左半边涂红）：
+        // ```
+        // r=0    画布 300×200 → 红在 x:0-98          ✅
+        // r=90   画布 300×200 → 一个红像素都没有      ❌
+        // r=90   画布 200×300 → 红在 x:0-198 y:0-98   ✅
+        // r=270  画布 200×300 → 红在 x:0-198 y:200-298 ✅
+        // ```
+        // 180° 不用换（宽高本来就没变）。
+        let sideways = (page.rotation / 90) % 2 == 1
+        let displaySize = sideways
+            ? CGSize(width: bounds.height, height: bounds.width)
+            : bounds.size
+
         let scale: CGFloat
         if let sourceURL, let pixels = ImageDocument.pixelSize(of: sourceURL) {
+            // 原图是等比的，所以拿宽度算一次就够；旋转之后这个比例仍然成立
             scale = pixels.width / bounds.width
         } else {
             scale = 2      // 拿不到原图分辨率（理论上不会）→ 按 2 倍保守导出
         }
-        let pixelWidth = max(1, Int((bounds.width * scale).rounded()))
-        let pixelHeight = max(1, Int((bounds.height * scale).rounded()))
+        let pixelWidth = max(1, Int((displaySize.width * scale).rounded()))
+        let pixelHeight = max(1, Int((displaySize.height * scale).rounded()))
 
         // PNG 还是 JPEG，决定了**要不要留透明**（v1.3.68）：
         //   · JPEG 不支持透明 —— 不铺白底的话透明区域会变成**黑**（底是 0,0,0,0）；

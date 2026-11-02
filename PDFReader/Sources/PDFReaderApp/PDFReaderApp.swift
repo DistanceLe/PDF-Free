@@ -399,16 +399,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    /// 关掉**最后一个**文档窗口之后，app **不退出**（v1.3.76，和「预览」一样）。
+    ///
+    /// 为什么改：常驻之后下次打开文件不用冷启动 —— 实测冷启动要约 0.8 秒
+    ///（SwiftUI + PDFKit 初始化那一段），常驻的话只要"建窗口 + 加载文档"。
+    ///
+    /// 退出走系统惯例：Dock 图标右键 →「退出」，或者 ⌘Q。
+    /// 没有窗口时点 Dock 图标会重新开一个（见 `applicationShouldHandleReopen`）。
+    ///
+    /// ⚠️ 以前这里返回 `true`，还配了个 `QuitWhenIdle` 兜底 —— 那套是为了防
+    /// 「0 窗口僵尸态」（窗口全关、app 还在、点它没反应）。现在点 Dock 会开窗口
+    ///（`applicationShouldHandleReopen`），僵尸态的前提不成立，整套逻辑都改成"不退出"。
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        Diagnostics.shared.record("applicationShouldTerminateAfterLastWindowClosed 被调用 → true")
-        // ⚠️ 仅供自动化验证：返回 false = **假装 AppKit 没让 app 退出**，
-        // 用来单独验证 `QuitWhenIdle` 那个兜底真的能救场（用户报的"0 窗口僵尸态"
-        // 就是这条通知没来）。正常使用不设这个变量 → 永远返回 true。
-        if ProcessInfo.processInfo.environment["PDFREADER_AUTOTEST_NO_LAST_WINDOW_QUIT"] != nil {
-            Diagnostics.shared.record("  （自动化：假装这条通知不起作用 → 只看 QuitWhenIdle 兜底）")
-            return false
-        }
-        return true
+        Diagnostics.shared.record("applicationShouldTerminateAfterLastWindowClosed："
+                                  + "最后一个窗口关了 → **不退出**（常驻，v1.3.76）")
+        return false
     }
 
     /// 退出前问一句有没有没保存的改动。

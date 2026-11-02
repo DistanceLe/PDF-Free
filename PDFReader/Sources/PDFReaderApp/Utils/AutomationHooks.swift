@@ -379,6 +379,50 @@ enum AutomationHooks {
             }
         }
 
+        // ── 转一下再保存（验证旋转真的写进了文件） ──
+        // `PDFREADER_AUTOTEST_ROTATE=1`：进编辑模式 → 顺时针 90° → 保存。
+        if env["PDFREADER_AUTOTEST_ROTATE"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                guard let vm = AppModelBridge.keyViewModel?.tabs.first?.viewModel else {
+                    Diagnostics.shared.record("自动验证[旋转]：没有可用的文档")
+                    return
+                }
+                vm.isEditable = true
+                let before = vm.pdfView?.currentPage?.rotation ?? -1
+                vm.rotateCurrentPageClockwise()
+                Diagnostics.shared.record("自动验证[旋转]：\(before)° → "
+                                          + "\(vm.pdfView?.currentPage?.rotation ?? -1)°"
+                                          + " · 标脏=\(vm.hasUnsavedChanges)")
+                do {
+                    _ = try vm.saveAnnotationsToDisk()
+                    Diagnostics.shared.record("自动验证[旋转]：已保存")
+                } catch {
+                    Diagnostics.shared.record("自动验证[旋转]：保存失败 —— \(error.localizedDescription)")
+                }
+            }
+        }
+
+        // ── 旋转后导出（图片文档专用） ──
+        // `PDFREADER_AUTOTEST_ROTATE_EXPORT=<输出路径>`：顺时针 90° → 导出到指定位置。
+        // 用来验"图片转了 90° 之后导出的图**真的转过来**了"——
+        // 只看导出有没有成功是不够的，之前那块 bug 的产物是"导出成功但整张空白"。
+        if let path = env["PDFREADER_AUTOTEST_ROTATE_EXPORT"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                guard let vm = AppModelBridge.keyViewModel?.tabs.first?.viewModel else {
+                    Diagnostics.shared.record("自动验证[旋转导出]：没有可用的文档")
+                    return
+                }
+                vm.isEditable = true
+                vm.rotateCurrentPageClockwise()
+                do {
+                    try vm.exportImage(to: URL(fileURLWithPath: path))
+                    Diagnostics.shared.record("自动验证[旋转导出]：✅ \(path)")
+                } catch {
+                    Diagnostics.shared.record("自动验证[旋转导出]：✗ \(error.localizedDescription)")
+                }
+            }
+        }
+
         // ── 搜一个词（验证结果列表的上下文摘要 / 页面上的搜索高亮） ──
         // `PDFREADER_AUTOTEST_SEARCH=<关键词>`：等文档装好、布局稳定之后执行一次搜索。
         if let query = env["PDFREADER_AUTOTEST_SEARCH"] {
