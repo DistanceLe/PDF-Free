@@ -1,6 +1,7 @@
 import AppKit
 import PDFKit
 import UniformTypeIdentifiers
+import ImageIO
 
 /// 让 app 能**看图**（v1.3.66）。
 ///
@@ -39,7 +40,28 @@ enum ImageDocument {
     /// ⚠️ `com.adobe.pdf` 实测是 **false**（PDF 不算图片），但这里仍然显式排掉 `pdf`：
     /// 哪天系统改了归类，也不至于把 PDF 当成图片走这条路。
     static func isImage(_ url: URL) -> Bool {
-        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return false }
+        let ext = url.pathExtension.lowercased()
+
+        // ① 有扩展名：按扩展名判断，快且准
+        if !ext.isEmpty {
+            guard let type = UTType(filenameExtension: ext) else { return false }
+            guard type != .pdf else { return false }
+            return type.conforms(to: .image)
+        }
+
+        // ② **没有扩展名** —— 邮件附件、网页另存的图经常这样（用户遇到的是「16976 (5)」）。
+        //    这时按扩展名判断**必然失败**，文件会被当成 PDF 丢给 `PDFDocument(url:)`，
+        //    然后弹「无法读取内容」。系统「预览」能双击打开，就是因为它会嗅探内容。
+        //
+        //    这里用 ImageIO 读**文件头**判断类型：`CGImageSourceCreateWithURL` 只解析头部、
+        //    不解码整张图（几毫秒），不会拖慢打开。
+        //    认不出来就返回 false，交给 PDF 那条路再试 —— 无扩展名的 PDF 本来就能打开
+        //    （`PDFDocument(url:)` 读的是内容，不看扩展名）。
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let identifier = CGImageSourceGetType(source) as String?,
+              let type = UTType(identifier) else {
+            return false
+        }
         guard type != .pdf else { return false }
         return type.conforms(to: .image)
     }
@@ -140,5 +162,75 @@ enum ImageDocument {
         guard let largest = candidates.max(by: { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh })
         else { return nil }
         return CGSize(width: largest.pixelsWide, height: largest.pixelsHigh)
+    }
+
+    // MARK: - 图片信息（右侧栏展示用，v1.3.80）
+
+    /// 一张图片的基本信息。
+    ///
+    /// 全部靠 ImageIO 读**文件头**拿到，不整张解码 —— 手机拍的 6000×4000 大图
+    /// 也不会因为"打开右栏"卡一下。
+    struct Info {
+        /// 类型的人类可读名，如「PNG 图像」
+        let typeDescription: String
+        /// 像素尺寸
+        let pixelSize: CGSize
+        /// 文件字节数
+        let fileSize: Int64
+        /// 色彩模型（`RGB` / `Gray` …），拿不到为 nil
+        let colorModel: String?
+        /// 有没有透明通道
+        let hasAlpha: Bool
+    }
+
+    /// 读图片信息。读不出来返回 nil。
+    ///
+    /// ⚠️ 这里**不用** `pixelSize(of:)`：那个走 `NSImage(contentsOf:)`，会把整张图解码；
+    /// `kCGImagePropertyPixelWidth` 从文件头就能读到，快得多。
+    static func info(for url: URL) -> Info? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+
+        // 类型：优先用 UTType 的本地化名（"PNG 图像"比 "public.png" 好读）
+        var typeDescription = "未知格式"
+        if let identifier = CGImageSourceGetType(source) as String? {
+            typeDescription = friendlyTypeName(identifier)
+        }
+
+        let width = properties?[kCGImagePropertyPixelWidth] as? CGFloat ?? 0
+        let height = properties?[kCGImagePropertyPixelHeight] as? CGFloat ?? 0
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+
+        return Info(typeDescription: typeDescription,
+                    pixelSize: CGSize(width: width, height: height),
+                    fileSize: size,
+                    colorModel: properties?[kCGImagePropertyColorModel] as? String,
+                    hasAlpha: properties?[kCGImagePropertyHasAlpha] as? Bool ?? false)
+    }
+
+    /// 图片类型的**中文名**。
+    ///
+    /// ⚠️ 不用 `UTType.localizedDescription`：实测在没做本地化的 app 里它返回英文
+    ///（"PNG image"），而整个界面都是中文，混着很突兀。常见格式直接给中文名，
+    /// 没覆盖到的再退回系统描述。
+    private static func friendlyTypeName(_ identifier: String) -> String {
+        let names: [String: String] = [
+            "public.png": "PNG 图像",
+            "public.jpeg": "JPEG 图像",
+            "public.tiff": "TIFF 图像",
+            "public.heic": "HEIC 图像",
+            "public.heif": "HEIF 图像",
+            "public.avif": "AVIF 图像",
+            "com.compuserve.gif": "GIF 图像",
+            "org.webmproject.webp": "WebP 图像",
+            "com.microsoft.bmp": "BMP 图像",
+            "com.microsoft.ico": "ICO 图标",
+            "public.svg-image": "SVG 图像",
+            "com.adobe.photoshop-image": "Photoshop 图像",
+            "public.camera-raw-image": "RAW 图像",
+        ]
+        if let name = names[identifier] { return name }
+        return UTType(identifier)?.localizedDescription ?? identifier
     }
 }

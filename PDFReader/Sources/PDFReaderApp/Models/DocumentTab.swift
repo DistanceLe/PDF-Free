@@ -65,6 +65,15 @@ struct DocumentTab: Identifiable, Equatable {
         // 实测 `合集2.3.pdf`（246MB）顶层就是 0 项 —— 那种文档开缩略图反而对。
         viewModel.activeSidebar =
             (document.outlineRoot?.numberOfChildren ?? 0) > 0 ? .outline : .thumbnails
+
+        // 图片：**把右侧栏也打开**（v1.3.80）。
+        //
+        // 右栏对图片显示的是「图片信息」（尺寸/大小/类型，见 `ImageInfoPanel`）——
+        // 打开一张图最常想知道的就是这几样，藏在一个默认关着的栏位里等于没有。
+        // PDF 保持默认收起（那边右栏是批注属性，没选中标注时没什么可看）。
+        if kind == .image {
+            viewModel.isRightSidebarVisible = true
+        }
     }
 
     /// 这是"看图"还是"读 PDF" —— 调用点读起来清楚些。

@@ -103,15 +103,24 @@ enum DocumentOpener {
     /// 弹「打开文件」面板，选完交给 `open(_:)`。
     static func openPanel() {
         let panel = NSOpenPanel()
-        // PDF + 系统认得的所有图片格式（v1.3.66）。
-        // ⚠️ 别在这里列具体后缀 —— `ImageDocument.openableTypes` 用的是抽象类型 `.image`，
-        // 它自动涵盖所有子类型，以后系统新增格式我们不用管。
-        panel.allowedContentTypes = ImageDocument.openableTypes
+        // ⚠️ **不再设 `allowedContentTypes`**（v1.3.81）。
+        //
+        // 它按 UTType 匹配，而**没有扩展名的文件**（邮件附件、网页另存）类型是
+        // `public.data` —— 既不是 `.pdf` 也不是 `.image`，在面板里直接灰掉、选不了。
+        // 可拖拽打开是好的（那条路走 `ImageDocument.isImage`，会用 ImageIO 嗅探内容），
+        // 于是同一个文件"拖进来能开、面板里选不到"，很割裂。
+        //
+        // 改成：文件全部列出来，**能不能选交给 `OpenPanelFilter` 逐个判断**。
+        panel.delegate = openPanelFilter
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK else { return }
         open(panel.urls)
     }
+
+    /// 面板 delegate 必须**有人长期持有** —— 否则每次开面板都新建一个、当场释放，
+    /// `shouldEnable` 根本不会被调到（弱引用）。
+    private static let openPanelFilter = OpenPanelFilter()
 
     /// 打开一组文件。
     ///
@@ -495,5 +504,41 @@ enum DocumentWindows {
             window.toggleTabBar(nil)
             Diagnostics.shared.record("标签栏：「\(window.title)」是第一个窗口 → 手动显示标签栏")
         }
+    }
+}
+
+/// 「打开文件」面板的过滤规则（v1.3.81）。
+///
+/// ## 为什么不用 `allowedContentTypes`
+///
+/// 它按 UTType 匹配，而**没有扩展名的文件**（邮件附件、网页另存）类型是 `public.data`，
+/// 既不是 `.pdf` 也不是 `.image` —— 在面板里直接被灰掉，选都选不了。
+/// 而拖拽打开是好的（那条路走 `ImageDocument.isImage`，会用 ImageIO 嗅探内容），
+/// 于是同一个文件"拖进来能开、面板里选不到"，很割裂。
+///
+/// ## 判断**只看文件名、不读文件内容**
+///
+/// 沙盒下浏览面板里的文件未必已经有读权限，去读内容会失败；
+/// 而"有没有扩展名"永远是可靠的。
+private final class OpenPanelFilter: NSObject, NSOpenSavePanelDelegate {
+
+    func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
+        // 目录永远可选，否则进不去（`canChooseDirectories = false` 只管"最终能不能选中"）
+        if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            return true
+        }
+
+        let ext = url.pathExtension.lowercased()
+
+        // ⚠️ **没有扩展名 → 一律放行**。
+        //
+        // 光靠文件名判断不了它是不是图片（那得读内容），而"选不到"比"选了打不开"糟糕得多：
+        // 打不开至少会弹一句「无法读取内容」，选不到则是**密而不宣的失败**——
+        // 用户只会以为这个文件不存在、或者 app 坏了。
+        if ext.isEmpty { return true }
+
+        // 有扩展名的照旧按类型过滤，保持"面板里不出现一堆无关文件"
+        guard let type = UTType(filenameExtension: ext) else { return false }
+        return type.conforms(to: .image) || type.conforms(to: .pdf)
     }
 }

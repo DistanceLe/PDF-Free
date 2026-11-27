@@ -230,8 +230,8 @@ struct OutlineSidebar: View {
     @State private var dropHint: DropHint?
     /// 提示线的自清理任务（见 `startDropHintWatchdog`）
     @State private var dropHintWatchdog: DispatchWorkItem?
-    /// 要不要弹「保存与备份」设置
-    @State private var showPreferences = false
+    /// 「默认收起」是不是已经对这份目录执行过了（见 `applyDefaultCollapseIfNeeded`）
+    @State private var didApplyDefaultCollapse = false
     @FocusState private var renameFocused: Bool
 
     init(tab: DocumentTab) {
@@ -251,12 +251,18 @@ struct OutlineSidebar: View {
             toolbar
         }
         .sheet(isPresented: $showAddSheet) { addSheet }
-        .sheet(isPresented: $showPreferences) {
-            SavePreferencesView()
-        }
         // 落点提示一出现就派人盯着（见 `startDropHintWatchdog`）
         .onChange(of: dropHint) { _, newValue in
             if newValue != nil { startDropHintWatchdog() }
+        }
+        // 打开文件时**默认收起**（v1.3.78）。以前是全展开 —— 长目录一眼看不到头，
+        // 而且和用户"先看大章节、再往下钻"的读法相反。
+        .onChange(of: viewModel.tocRows.count) { _, count in
+            if count > 0 { applyDefaultCollapseIfNeeded() }
+        }
+        .onAppear {
+            // 视图出现时目录往往已经加载好了，`count` 没变化过 → 上面的 onChange 不会触发
+            applyDefaultCollapseIfNeeded()
         }
         // 侧边栏切走时视图会销毁，但 viewModel 上的选中项**不会自己清** ——
         // 留着的话切到别的面板按 Delete 会去打一个已经不存在的列表
@@ -270,6 +276,7 @@ struct OutlineSidebar: View {
             selection = nil
             renaming = nil
             collapsed = []
+            didApplyDefaultCollapse = false     // 新文档要重新按「默认收起」初始化
             viewModel.tocSelectedID = nil
             viewModel.reloadTOC()
         }
@@ -295,6 +302,32 @@ struct OutlineSidebar: View {
             if row.hasChildren, collapsed.contains(row.id) { skippingBelowDepth = row.depth }
         }
         return result
+    }
+
+    // MARK: - 一键展开 / 收起（v1.3.78）
+
+    /// 有没有可折叠的节点 —— 一个都没有的话两个按钮都灰着（点了也没意义）
+    private var hasAnyExpandableRow: Bool {
+        viewModel.tocRows.contains(where: \.hasChildren)
+    }
+
+    private func expandAll() {
+        collapsed.removeAll()
+    }
+
+    private func collapseAll() {
+        collapsed = Set(viewModel.tocRows.filter(\.hasChildren).map(\.id))
+    }
+
+    /// **首次**拿到目录时，把所有有子项的节点全部收起。
+    ///
+    /// `didApplyDefaultCollapse` 保证只做一次 —— 之后用户自己展开/收起、
+    /// 或者编辑目录让 `tocRows` 变化，都不能把状态重置回去（那样每改一次目录
+    /// 就把用户展开的树全收起来，很烦）。
+    private func applyDefaultCollapseIfNeeded() {
+        guard !didApplyDefaultCollapse, !viewModel.tocRows.isEmpty else { return }
+        collapsed = Set(viewModel.tocRows.filter(\.hasChildren).map(\.id))
+        didApplyDefaultCollapse = true
     }
 
     // MARK: - 子视图
@@ -589,15 +622,31 @@ struct OutlineSidebar: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                Button {
-                    showPreferences = true
-                } label: {
-                    Image(systemName: "gearshape")
+                // 一键展开 / 收起（v1.3.78）。
+                //
+                // ⚠️ 图标方向和树里那个单节点箭头**保持一致**：`chevron.down` = 展开、
+                // `chevron.right` = 收起；加个 `2` 表示"全部"。用户不用重新学一套符号。
+                //
+                // ⚠️ 这里原来是「保存与备份设置」的齿轮 —— **已去掉**：它弹的
+                // `SavePreferencesView` 和 App 菜单里的「设置…」（⌘,）是同一个东西，
+                // 重复一个入口还多一个"关不掉"的模态框。设置只留菜单那一条路。
+                Button { expandAll() } label: {
+                    Image(systemName: "chevron.down.2")
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("保存与备份设置")
+                .help("全部展开")
+                .disabled(!hasAnyExpandableRow)
+
+                Button { collapseAll() } label: {
+                    Image(systemName: "chevron.right.2")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("全部收起")
+                .disabled(!hasAnyExpandableRow)
             }
         }
         .padding(8)
@@ -1792,5 +1841,93 @@ struct SavePreferencesView: View {
                 }
             }
         )
+    }
+}
+
+// MARK: - 图片信息面板（v1.3.80）
+
+/// 右侧栏：图片文档的信息。
+///
+/// 图片没有"批注属性"可看，右栏默认就显示这些 —— 尺寸、大小、类型是看图片时
+/// 最常想确认的几件事。数据全部来自 `ImageDocument.info(for:)`（只读文件头，
+/// 不解码整张图），所以打开右栏不会卡。
+///
+/// ⚠️ 用 `tab.url`（原图路径）而不是 `documentURL` —— 图片文档的 `documentURL`
+/// 永远是 nil（见 `ImageDocument` 的底线 1）。
+struct ImageInfoPanel: View {
+    let tab: DocumentTab
+
+    private var info: ImageDocument.Info? {
+        ImageDocument.info(for: tab.url)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+
+            if let info {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        row("文件名", tab.url.lastPathComponent, mono: false)
+                        Divider().padding(.leading, 12)
+                        row("类型", info.typeDescription, mono: false)
+                        Divider().padding(.leading, 12)
+                        row("尺寸", pixelText(info.pixelSize), mono: true)
+                        Divider().padding(.leading, 12)
+                        row("大小", byteText(info.fileSize), mono: true)
+                        if let model = info.colorModel, !model.isEmpty {
+                            Divider().padding(.leading, 12)
+                            row("色彩", model, mono: true)
+                        }
+                        Divider().padding(.leading, 12)
+                        row("透明", info.hasAlpha ? "有透明通道" : "无", mono: false)
+                    }
+                }
+            } else {
+                Text("读不到这张图片的信息")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text("图片信息")
+                .font(.system(size: 12, weight: .semibold))
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func row(_ label: String, _ value: String, mono: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 48, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11, design: mono ? .monospaced : .default))
+                .textSelection(.enabled)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    private func pixelText(_ size: CGSize) -> String {
+        "\(Int(size.width)) × \(Int(size.height)) 像素"
+    }
+
+    private func byteText(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }

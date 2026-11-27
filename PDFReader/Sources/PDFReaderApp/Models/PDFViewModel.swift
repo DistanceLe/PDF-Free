@@ -662,6 +662,14 @@ class PDFViewModel: ObservableObject {
         syncPreservedZoom()
     }
 
+    /// 把缩放设到「实际大小」。
+    ///
+    /// ⚠️ **界面上已经没有这个入口了**（v1.3.77 去掉了「缩放方式」菜单里的那一项）——
+    /// 用户切换实际大小统一走工具栏那个百分比数字（`toggleActualSizeAndBack`，
+    /// 点一下切过去、再点一下切回来）。这两个入口本来就是同一件事，留一个够用。
+    ///
+    /// 方法留着是因为**自动化验证还在用**（`PDFREADER_AUTOTEST_ACTUAL_SIZE`），
+    /// 而且"直接设到实际大小、不关心来路"这个动作本身是干净的。
     func zoomToActualSize() {
         // ⚠️ **不是 `1.0`**（v1.3.64）：`1.0` 只等于"1 PDF 点 = 1 界面点"，
         // 而"实际大小"要求页面上量出来就是纸的物理尺寸 —— 见 `ScreenMetrics`。
@@ -859,8 +867,44 @@ class PDFViewModel: ObservableObject {
         let constrained = clipView.constrainBoundsRect(
             CGRect(origin: origin, size: clipView.bounds.size)
         )
+
+        // ⚠️ **必须挡 NaN**（2026-11-03，连崩三次）。
+        //
+        // 崩溃日志里 AppKit 的断言原文是 **"Invalid view geometry: value is NaN"**，
+        // 崩在 `clipView.scroll(to:)` 里面（`_NSViewValidateGeometry`）。
+        //
+        // NaN 会一路穿过所有算术，而且**没有报错**：`dx = center - midX` 是 NaN
+        // → `origin` 是 NaN → `constrainBoundsRect` 也救不回来。
+        // `guard scale > 0` 只挡得住 scale 那一路（`NaN > 0` 恰好是 false），
+        // 挡不住 `pdfView.bounds` / `clipView.bounds` 变成 NaN 的那一路 ——
+        // 侧边栏收放、窗口刚显示、缩放动画中间，这些布局瞬间都可能。
+        //
+        // 宁可这次不滚（选中高亮已经标出来了，再点一次就行），也绝不能让 app 崩。
+        guard Self.isFinite(rect),
+              Self.isFinite(rectInView),
+              Self.isFinite(clipView.bounds),
+              Self.isFinite(pdfView.bounds),
+              Self.isFinite(constrained) else {
+            Diagnostics.shared.record("centerOn：几何值非法（NaN/Inf）→ 跳过这次滚动"
+                                      + " · rect=\(rect.debugDescription)"
+                                      + " · rectInView=\(rectInView.debugDescription)"
+                                      + " · clipBounds=\(clipView.bounds.debugDescription)"
+                                      + " · pdfBounds=\(pdfView.bounds.debugDescription)"
+                                      + " · constrained=\(constrained.debugDescription)")
+            return
+        }
+
         clipView.scroll(to: constrained.origin)
         scrollView.reflectScrolledClipView(clipView)
+    }
+
+    /// 矩形的四个分量都是有限值。
+    ///
+    /// `CGRect` 自带 `isNull` / `isInfinite`，但**没有 `isFinite`** ——
+    /// 而 NaN 既不是 null 也不是 infinite，两个都查不出来。
+    private static func isFinite(_ rect: CGRect) -> Bool {
+        rect.origin.x.isFinite && rect.origin.y.isFinite
+            && rect.size.width.isFinite && rect.size.height.isFinite
     }
 
     func clearSearch() {

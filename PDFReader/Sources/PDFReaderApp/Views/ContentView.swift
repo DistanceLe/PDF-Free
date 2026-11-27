@@ -364,21 +364,26 @@ private struct RightPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if pdfVM.selectedAnnotation == nil && pdfVM.searchQuery.isEmpty {
-                // 内容空了就**留白**，而不是让整栏消失 —— 删一条标注就抽掉一整栏，
-                // 页面的宽度会跟着横跳一下，很晃眼。
-                emptyState
-            } else {
-                if let item = pdfVM.selectedAnnotation {
-                    AnnotationInspector(viewModel: pdfVM, item: item)
-                        .frame(maxHeight: pdfVM.searchQuery.isEmpty ? .infinity : 340)
-                    if !pdfVM.searchQuery.isEmpty { Divider() }
+            if let item = pdfVM.selectedAnnotation {
+                AnnotationInspector(viewModel: pdfVM, item: item)
+                    .frame(maxHeight: pdfVM.searchQuery.isEmpty ? .infinity : 340)
+                if !pdfVM.searchQuery.isEmpty { Divider() }
+            } else if pdfVM.searchQuery.isEmpty {
+                // 既没选中标注、也没有搜索词 —— 这是"只看文档"的默认状态。
+                // 图片文档显示图片信息（v1.3.80，尺寸/大小/类型）；PDF 仍是原来的留白 + 提示。
+                //
+                // ⚠️ 内容空了要**留白**，而不是让整栏消失 —— 删一条标注就抽掉一整栏，
+                // 页面宽度会跟着横跳一下，很晃眼。
+                if pdfVM.sourceKind == .image {
+                    ImageInfoPanel(tab: tab)
+                } else {
+                    emptyState
                 }
+            }
 
-                if !pdfVM.searchQuery.isEmpty {
-                    SearchResultsPanel(viewModel: pdfVM)
-                        .frame(maxHeight: .infinity)
-                }
+            if !pdfVM.searchQuery.isEmpty {
+                SearchResultsPanel(viewModel: pdfVM)
+                    .frame(maxHeight: .infinity)
             }
         }
         // 把这一栏**内容的自然宽度**报上去（`DocumentLayout` 用它发现"内容撑破栏宽"）。

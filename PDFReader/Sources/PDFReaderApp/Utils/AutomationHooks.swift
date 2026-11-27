@@ -437,6 +437,25 @@ enum AutomationHooks {
             }
         }
 
+        // ── 搜完之后自动点第 N 条结果（复现"点搜索结果闪退"，2026-11-03） ──
+        // `PDFREADER_AUTOTEST_SEARCH_GOTO=<序号>`（从 0 开始），要和 `AUTOTEST_SEARCH` 一起用。
+        if let raw = env["PDFREADER_AUTOTEST_SEARCH_GOTO"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+                guard let vm = AppModelBridge.keyViewModel?.tabs.first?.viewModel else {
+                    Diagnostics.shared.record("自动验证[点结果]：没有可用的文档")
+                    return
+                }
+                guard let index = Int(raw), index >= 0, index < vm.searchResults.count else {
+                    Diagnostics.shared.record("自动验证[点结果]：结果不够"
+                                              + "（共 \(vm.searchResults.count) 条，要第 \(raw) 条）")
+                    return
+                }
+                Diagnostics.shared.record("自动验证[点结果]：点第 \(index) 条／共 \(vm.searchResults.count) 条")
+                vm.goToSearchResult(at: index)
+                Diagnostics.shared.record("自动验证[点结果]：没崩，已滚过去")
+            }
+        }
+
         // ── 开 N 个空标签页（验证系统标签栏确实把窗口并起来了） ──
         //
         // `PDFREADER_AUTOTEST_NEW_TAB=<数字>` → 走 `openWindow`（我们的菜单/⌘T 用它）

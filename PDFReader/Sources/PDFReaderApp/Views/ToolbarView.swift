@@ -323,17 +323,29 @@ private struct DocumentToolbarContent: View {
             .buttonStyle(.borderless)
             .help("放大")
 
-            Menu {
-                Button("实际大小") { pdfVM.zoomToActualSize() }
-                Button("适合宽度") { pdfVM.zoomToFitWidth() }
-                Button("适合页面") { pdfVM.zoomToFitPage() }
-            } label: {
-                Image(systemName: "aspectratio")
+            // 适合宽度 / 适合页面（v1.3.77）。
+            //
+            // 原来这三项（实际大小 / 适合宽度 / 适合页面）一起藏在「缩放方式」菜单里。
+            // 现在：**实际大小去掉** —— 它和工具栏那个百分比是一回事（点百分比就切到 100%），
+            // 没必要留第二个入口；另外两项是看文档的高频操作，直接摆出来和「放大」并排。
+            //
+            // 图标选择：
+            // - 适合宽度 → `arrow.left.and.right.square`（方框 + 左右箭头），方向直白；
+            // - 适合页面 → 对角双向箭头，是"整页适应"的通用画法（预览/Safari 都类似）。
+            //   没用「上下箭头」是因为那会被读成"适合高度"—— 横版文档下语义就错了。
+            Button(action: { pdfVM.zoomToFitWidth() }) {
+                Image(systemName: "arrow.left.and.right.square")
                     .font(.system(size: 14))
             }
-            .menuStyle(.borderlessButton)
-            .frame(width: 28)
-            .help("缩放方式")
+            .buttonStyle(.borderless)
+            .help("适合宽度（宽度铺满窗口）")
+
+            Button(action: { pdfVM.zoomToFitPage() }) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 14))
+            }
+            .buttonStyle(.borderless)
+            .help("适合页面（整页完整可见）")
         }
     }
 
